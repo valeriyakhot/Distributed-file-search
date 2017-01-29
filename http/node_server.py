@@ -16,7 +16,7 @@ import xml.etree.cElementTree as ET
 from .common import constants
 from .common import util
 from .common import send_it
-
+from .common import xml_func
 
 DIRECTORY='./'
 
@@ -46,6 +46,30 @@ def parse_args():
     args.base = os.path.normpath(os.path.realpath(args.base))
     return args
     
+def check(args,s,rest) :
+    req, rest = util.recv_line(s, rest)
+    req_comps = req.split(' ', 2)
+    if req_comps[2] != constants.HTTP_SIGNATURE:
+        raise RuntimeError('Not HTTP protocol')
+    if len(req_comps) != 3:
+        raise RuntimeError('Incomplete HTTP protocol')
+
+    method, uri, signature = req_comps
+    if method != 'GET':
+        raise RuntimeError(
+            "HTTP unsupported method '%s'" % method
+        )
+
+    if not uri or uri[0] != '/':
+        raise RuntimeError("Invalid URI")
+    file_name = os.path.normpath(
+        os.path.join(
+            args.base,
+            uri[1:],
+        )
+    )    
+    return uri
+    
 def server():  
     args = parse_args()
     print('start')
@@ -64,41 +88,7 @@ def server():
                 try:
                     rest = bytearray()
 
-
-                    #
-                    # Parse request line
-                    #
-                    
-                    req, rest = util.recv_line(s, rest)
-                    req_comps = req.split(' ', 2)
-                    if req_comps[2] != constants.HTTP_SIGNATURE:
-                        raise RuntimeError('Not HTTP protocol')
-                    if len(req_comps) != 3:
-                        raise RuntimeError('Incomplete HTTP protocol')
-
-                    method, uri, signature = req_comps
-                    if method != 'GET':
-                        raise RuntimeError(
-                            "HTTP unsupported method '%s'" % method
-                        )
-
-
-                    #
-                    # Create a file out of request uri.
-                    # Be extra careful, it must not escape
-                    # the base path.
-                    #
-                    # NOTICE: os.path.normpath cannot be used checkout:
-                    # os.path.normpath(('/a/b', '/a/b1')
-                    #
-                    if not uri or uri[0] != '/':
-                        raise RuntimeError("Invalid URI")
-                    file_name = os.path.normpath(
-                        os.path.join(
-                            args.base,
-                            uri[1:],
-                        )
-                    )
+                    uri=check(args,s,rest)
                     
                     
                     parse = urlparse.urlparse(uri)
@@ -108,10 +98,10 @@ def server():
                     normal_out=True
                     if uri[:8]=='/search?':
                         files,ids= find_name(mem,param[0][0])
-                        output=xml_form(files,ids)
+                        output=xml_func.xml_form(files,ids)
                     elif uri[:15]=='/direct_search?':
                         files,ids= find_name(mem,param[0][0],True)
-                        output=xml_form(files,ids)
+                        output=xml_func.xml_form(files,ids)
                     elif uri[:10]=='/get_file?':
                         normal_out=False
                         file_name = os.path.join(mem[int(param[0][0])]['root'],mem[int(param[0][0])]['filename'])
@@ -156,14 +146,6 @@ def find_name(mem,name,direct=False):
                 ids.append(i)
     return files,ids
 
-def xml_form(files,ids):
-    root = ET.Element('root')
-    
-    if len(files)>0:
-        for file,i in zip(files,ids):
-            ET.SubElement(root, 'result', name=file, id=str(i))
-       
-    return ET.tostring(root)
     
 def main():
     server()

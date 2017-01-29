@@ -16,9 +16,8 @@ import xml.etree.cElementTree as ET
 from .common import constants
 from .common import util
 from .common import send_it
+from .common import xml_func
 
-HTML_TABLE_HEADER='''<!DOCTYPE html><html><body><table style="width:35%" ; border= "2px solid #dddddd">  <tr>    <th align="left"> Filename </th>    <th align="left">Option</th>   </tr>'''
-HTML_END='''</table></body></html>'''
 HTML_SEARCH='search_form.html'
 URI_SEARCH='/search?Search='
 URI_ID='/get_file?id='
@@ -57,17 +56,30 @@ def parse_args():
     )
     return parser.parse_args()
 
-def xml_to_html(st):
-    st=str(st)
-    root=ET.fromstring(st)
-    html=HTML_TABLE_HEADER
-    for result in root.findall('result'):
-        name = result.get('name')
-        id=result.get('id')
-        html+='  <tr> <td>%s</td> <td align="middle"> <a href="/download_file?id=%s">&lt;download&gt;</a> <a href="/view_file?id=%s">&lt;view&gt;</a></td>  </tr>' %(name,id,id)
-    html+='<a href="/form?">&lt;Back&gt;</a>'+HTML_END
-    return html
-    
+def check(args,s,rest) :
+    #check http ask
+    req, rest = util.recv_line(s, rest)
+    req_comps = req.split(' ', 2)
+    if req_comps[2] != constants.HTTP_SIGNATURE:
+        raise RuntimeError('Not HTTP protocol')
+    if len(req_comps) != 3:
+        raise RuntimeError('Incomplete HTTP protocol')
+
+    method, uri, signature = req_comps
+    if method != 'GET':
+        raise RuntimeError(
+            "HTTP unsupported method '%s'" % method
+        )
+
+    if not uri or uri[0] != '/':
+        raise RuntimeError("Invalid URI")
+    file_name = os.path.normpath(
+        os.path.join(
+            args.base,
+            uri[1:],
+        )
+    )    
+    return uri
 
 def server():  
     args = parse_args()
@@ -80,7 +92,6 @@ def server():
     ) as sl:
         sl.bind((args.bind_address, args.bind_port))
         sl.listen(10)
-        print 'connect'
         while True:
             s, addr = sl.accept()
             with contextlib.closing(s):
@@ -88,45 +99,13 @@ def server():
                 try:
                     rest = bytearray()
                        
-                    req, rest = util.recv_line(s, rest)
-                    req_comps = req.split(' ', 2)
-                    if req_comps[2] != constants.HTTP_SIGNATURE:
-                        raise RuntimeError('Not HTTP protocol')
-                    if len(req_comps) != 3:
-                        raise RuntimeError('Incomplete HTTP protocol')
+                    uri=check(args,s,rest)
 
-                    method, uri, signature = req_comps
-                    if method != 'GET':
-                        raise RuntimeError(
-                            "HTTP unsupported method '%s'" % method
-                        )
-
-
-                    #
-                    # Create a file out of request uri.
-                    # Be extra careful, it must not escape
-                    # the base path.
-                    #
-                    # NOTICE: os.path.normpath cannot be used checkout:
-                    # os.path.normpath(('/a/b', '/a/b1')
-                    #
-                    if not uri or uri[0] != '/':
-                        raise RuntimeError("Invalid URI")
-                    file_name = os.path.normpath(
-                        os.path.join(
-                            args.base,
-                            uri[1:],
-                        )
-                    )
-                    
-                    print(uri)
-                    
                     parse = urlparse.urlparse(uri)
                     param_temp = parse.query
                     param = urlparse.parse_qs(urlparse.urlparse(uri).query).values()
                     
                     if uri[:15]==URI_SEARCH:
-                        print ('I do search')
                         if len(uri) != len(URI_SEARCH):
                             output=client(URI_SEARCH,param[0][0],True) 
                     elif uri[:11]=='/view_file?':
@@ -135,17 +114,12 @@ def server():
                         output=client(URI_ID,param[0][0],False)
                         send_it.download(s,output)
                         
-
-                    elif uri[:6]=='/form?':
-                    
+                    elif uri[:6]=='/form?':                
                         send_it.send_file(s,HTML_SEARCH)       
-                        
+                       
                     else :
                         output =''
-
-
                     send_it.send(s,output)
-
 
                 except IOError as e:
                     traceback.print_exc()
@@ -173,7 +147,6 @@ def client(uri_beg,search,xml_status):
             type=socket.SOCK_STREAM,
         )
     ) as s:
-        print  (str(url.hostname)+ str(url.port if url.port else constants.DEFAULT_HTTP_PORT))
         s.connect((
             url.hostname,
             url.port if url.port else constants.DEFAULT_HTTP_PORT,
@@ -224,34 +197,22 @@ def client(uri_beg,search,xml_status):
         else:
             raise RuntimeError('Too many headers')
 
-        #
-        # Write content
-        #
-        # Do not write output file directly
-        # Create temporary file at same directory
-        # Only if all OK we overwrite the file
-        #
-        
         try:
             if content_length is None:
-                # Fast track, no content length
-                # Recv until disconnect
+
                 buf=''
                 while True:
                     buf += s.recv(constants.BLOCK_SIZE)
                     if not buf:
                         break
                 if xml_status:
-                    output=xml_to_html(buf)
+                    output=xml_func.xml_to_html(buf)
                 else:
                     output=buf
                 return output
             else:
                 buff=''
                 
-                # Safe track, we have content length
-                # Recv excacly what requested.
-                print content_length
                 left_to_read = content_length
                 while left_to_read > 0:
                     if not rest:
@@ -264,9 +225,8 @@ def client(uri_beg,search,xml_status):
                     buf, rest = rest[:left_to_read], rest[left_to_read:]
                     buff+=buf
                     left_to_read -= len(buf)
-                    print len(buff)
                 if xml_status:
-                    output=xml_to_html(buff)
+                    output=xml_func.xml_to_html(buff)
                 else:
                     output=buff
                 
